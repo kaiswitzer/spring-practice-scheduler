@@ -24,11 +24,11 @@ with st.sidebar:
     st.divider()
     
     # 2. Lane Counts
-    num_guest_lanes = st.number_input("Number of Guest Lanes:", min_value=0, max_value=20, value=8)
+    num_recruit_lanes = st.number_input("Number of Recruit Lanes:", min_value=0, max_value=20, value=8)
     num_floater_lanes = st.number_input("Number of Floater Lanes:", min_value=0, max_value=20, value=5)
     
     st.divider()
-    st.caption("Logic: Guest Lanes filled first (Regular staff primary). Floater Lanes filled second (Priority staff primary).")
+    st.caption("Logic: Recruit Lanes filled first (Regular staff primary). Floater Lanes filled second (Priority staff primary).")
 
 # --- CORE LOGIC FUNCTIONS ---
 def parse_time(t_str):
@@ -163,10 +163,10 @@ if file:
             others_pool[name] = mins
 
     final_lanes = []
-    # Fill Guest Lanes first (Others primary, Priority fallback)
-    for i in range(num_guest_lanes):
+    # Fill Recruit Lanes first (Others primary, Priority fallback)
+    for i in range(num_recruit_lanes):
         data = build_lane_sticky(others_pool, priority_pool, 360, 960)
-        final_lanes.append({"type": f"Guest Lane {i+1}", "data": data})
+        final_lanes.append({"type": f"Recruit Lane {i+1}", "data": data})
     
     # Fill Floater Lanes second (Priority primary, Others fallback)
     for i in range(num_floater_lanes):
