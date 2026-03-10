@@ -3,32 +3,82 @@ import pandas as pd
 from datetime import datetime, time
 import io
 
-# --- CONFIGURATION & UI SETUP ---
-st.set_page_config(page_title="Spring Practice Scheduler", layout="wide")
-st.title("📋 Spring Practice Scheduler")
+# --- CONFIGURATION & OSU THEME ---
+st.set_page_config(page_title="Buckeye Practice Scheduler", layout="wide", page_icon="🌰")
+
+# OSU Custom CSS for Scarlet & Gray Branding
+st.markdown("""
+    <style>
+    .stButton>button {
+        background-color: #bb0000;
+        color: white;
+        border-radius: 5px;
+    }
+    .stDownloadButton>button {
+        background-color: #bb0000;
+        color: white;
+        width: 100%;
+    }
+    h1 { color: #bb0000; }
+    h2 { color: #666666; }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🌰 Spring Practice Scheduler")
+st.subheader("Fisher College of Business | Staffing Logistics")
+
+# --- TEMPLATE GENERATOR ---
+def generate_template():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # Sheet 1: Data Entry
+        example_data = {
+            "Staff Full Name": ["Kai Switzer", "Madison Herbert", "Brutus Buckeye"],
+            "Availability": ["8am-12pm; 2pm-4pm", "9:00 AM - 4:00 PM", "6am-10am"]
+        }
+        pd.DataFrame(example_data).to_excel(writer, index=False, sheet_name='Practice_Availability')
+        
+        # Sheet 2: Instructions
+        instr_data = {
+            "Guide": ["Time Format", "Multiple Shifts", "Names", "Empty Cells"],
+            "Instructions": [
+                "Use AM/PM (e.g., 8am-11am or 1:30 PM - 4 PM)",
+                "Separate shifts with a semicolon (;) or 'and'",
+                "Use the Full Name as it appears in the Priority List",
+                "Leave blank or type 'Not Available' if they cannot work"
+            ]
+        }
+        pd.DataFrame(instr_data).to_excel(writer, index=False, sheet_name='INSTRUCTIONS')
+    return output.getvalue()
 
 # --- SIDEBAR SETTINGS ---
 with st.sidebar:
+    st.image("https://brand.osu.edu/assets/site/logo.png", width=100) # Simple OSU Logo placeholder
     st.header("⚙️ Scheduler Settings")
     
-    # 1. Full Name Priority Keywords
-    # Updated with your specific full names
-    default_priority = (
-        "Trenton Wells, Madison Herbert, Joaquin Lira, "
-        "Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman"
+    # Template Download Section
+    st.subheader("1. Get the Template")
+    st.info("Download this first if you need the correct Excel format.")
+    template_file = generate_template()
+    st.download_button(
+        label="📥 Download Excel Template",
+        data=template_file,
+        file_name="Practice_Availability_Template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    priority_input = st.text_area("Priority Staff Full Names (comma separated):", default_priority)
-    # Clean list: remove whitespace and use lowercase for matching
+    
+    st.divider()
+    
+    st.subheader("2. Priority Staff")
+    default_priority = "Trenton Wells, Madison Herbert, Joaquin Lira, Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman"
+    priority_input = st.text_area("Full names (comma separated):", default_priority)
     PRIORITY_FULL_NAMES = [p.strip() for p in priority_input.split(",") if p.strip()]
     
     st.divider()
     
-    # 2. Lane Counts
-    num_recruit_lanes = st.number_input("Number of Recruit Lanes:", min_value=0, max_value=20, value=8)
-    num_floater_lanes = st.number_input("Number of Floater Lanes:", min_value=0, max_value=20, value=5)
-    
-    st.divider()
-    st.caption("Logic: Recruit Lanes filled first (Regular staff primary). Floater Lanes filled second (Priority staff primary).")
+    st.subheader("3. Lane Counts")
+    num_recruit_lanes = st.number_input("Recruit Lanes:", min_value=0, max_value=20, value=8)
+    num_floater_lanes = st.number_input("Floater Lanes:", min_value=0, max_value=20, value=5)
 
 # --- CORE LOGIC FUNCTIONS ---
 def parse_time(t_str):
@@ -69,19 +119,14 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
     lane_schedule = []
     curr = start_min
     last_person = None
-    
     while curr < end_min:
         best_person = None
         target_pool = None
-        
-        # Stickiness: Keep the same person if they are still available
         for pool in [primary_pool, secondary_pool]:
             if last_person in pool and curr in pool[last_person]:
                 best_person = last_person
                 target_pool = pool
                 break
-        
-        # Selection: Find someone in the primary pool first
         if not best_person:
             longest_stretch = -1
             for pool in [primary_pool, secondary_pool]:
@@ -95,7 +140,7 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
                             longest_stretch = stretch
                             best_person = name
                             target_pool = pool
-                if best_person: break # Stop looking if we found a primary person
+                if best_person: break 
 
         if best_person:
             stretch = 0
@@ -109,7 +154,6 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
             last_person = best_person
             curr = seg_end
         else:
-            # Handle Gaps
             next_start = end_min
             for p in [primary_pool, secondary_pool]:
                 for mins in p.values():
@@ -134,7 +178,7 @@ def format_cell(lane_data, b_start_str, b_end_str):
     return " / ".join(entries) if entries else "⚠️ GAP"
 
 def style_gaps(val):
-    color = '#ff4b4b22' if isinstance(val, str) and "⚠️ GAP" in val else ''
+    color = '#ff4b4b33' if isinstance(val, str) and "⚠️ GAP" in val else ''
     return f'background-color: {color}'
 
 # --- MAIN APP PROCESSING ---
@@ -149,13 +193,7 @@ if file:
     for _, row in df.iterrows():
         name = str(row.iloc[0]).strip()
         mins = get_availability_minutes(row.iloc[1])
-        
-        # KEY CHANGE: Check for full name match to avoid "Madison" confusion
-        is_priority = False
-        for p_name in PRIORITY_FULL_NAMES:
-            if p_name.lower() in name.lower():
-                is_priority = True
-                break
+        is_priority = any(p_name.lower() in name.lower() for p_name in PRIORITY_FULL_NAMES)
         
         if is_priority:
             priority_pool[name] = mins
@@ -163,12 +201,10 @@ if file:
             others_pool[name] = mins
 
     final_lanes = []
-    # Fill Recruit Lanes first (Others primary, Priority fallback)
     for i in range(num_recruit_lanes):
         data = build_lane_sticky(others_pool, priority_pool, 360, 960)
         final_lanes.append({"type": f"Recruit Lane {i+1}", "data": data})
     
-    # Fill Floater Lanes second (Priority primary, Others fallback)
     for i in range(num_floater_lanes):
         data = build_lane_sticky(priority_pool, others_pool, 360, 960)
         final_lanes.append({"type": f"Floater Lane {i+1}", "data": data})
@@ -186,15 +222,17 @@ if file:
         table_rows.append(row)
 
     res_df = pd.DataFrame(table_rows)
-    st.subheader("Final Practice Schedule")
+    st.subheader("🏈 Generated Practice Schedule")
     st.dataframe(res_df.style.map(style_gaps), use_container_width=True)
 
     if warnings:
-        with st.expander("Schedule Notes & Gaps"):
+        with st.expander("🚩 Coverage Alerts"):
             for w in sorted(list(set(warnings))):
                 st.write(f"- {w}")
 
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         res_df.to_excel(writer, index=False)
-    st.download_button("📥 Download Excel Schedule", out.getvalue(), "Spring_Practice_Schedule.xlsx")
+    
+    st.divider()
+    st.download_button("💾 Save Final Schedule to Excel", out.getvalue(), "Buckeye_Practice_Schedule.xlsx")
