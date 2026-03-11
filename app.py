@@ -3,82 +3,76 @@ import pandas as pd
 from datetime import datetime, time
 import io
 
-# --- CONFIGURATION & OSU THEME ---
+# --- 1. OSU BRANDING & THEME (Scarlet & Gray) ---
 st.set_page_config(page_title="Buckeye Practice Scheduler", layout="wide", page_icon="🌰")
 
-# OSU Custom CSS for Scarlet & Gray Branding
+# Custom CSS for the "Settings" label and OSU look
 st.markdown("""
     <style>
-    .stButton>button {
-        background-color: #bb0000;
-        color: white;
-        border-radius: 5px;
+    /* Change Button Colors to Scarlet */
+    .stButton>button, .stDownloadButton>button {
+        background-color: #bb0000 !important;
+        color: white !important;
+        border-radius: 8px;
+        border: none;
     }
-    .stDownloadButton>button {
-        background-color: #bb0000;
-        color: white;
-        width: 100%;
+    /* Main Header Styling */
+    .main-title {
+        color: #bb0000;
+        font-size: 50px;
+        font-weight: bold;
+        border-bottom: 5px solid #666666;
+        margin-bottom: 20px;
     }
-    h1 { color: #bb0000; }
-    h2 { color: #666666; }
+    /* Sidebar "Settings" Label Override */
+    section[data-testid="stSidebar"] .st-emotion-cache-10oheav {
+        display: flex;
+        flex-direction: column-reverse;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌰 Spring Practice Scheduler")
-st.subheader("Fisher College of Business | Staffing Logistics")
+# --- 2. MAIN PAGE CONTENT ---
+col1, col2 = st.columns([1, 4])
+with col1:
+    # Official OSU Logo from Web (will work on GitHub)
+    st.image("https://brand.osu.edu/assets/site/logo.png", width=120)
+with col2:
+    st.markdown('<p class="main-title">🌰 Buckeye Practice Scheduler</p>', unsafe_allow_html=True)
+    st.markdown("### *Fisher College of Business | Staffing Logistics*")
 
-# --- TEMPLATE GENERATOR ---
+st.divider()
+
+# --- 3. TEMPLATE GENERATOR ---
 def generate_template():
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # Sheet 1: Data Entry
         example_data = {
             "Staff Full Name": ["Kai Switzer", "Madison Herbert", "Brutus Buckeye"],
             "Availability": ["8am-12pm; 2pm-4pm", "9:00 AM - 4:00 PM", "6am-10am"]
         }
         pd.DataFrame(example_data).to_excel(writer, index=False, sheet_name='Practice_Availability')
-        
-        # Sheet 2: Instructions
-        instr_data = {
-            "Guide": ["Time Format", "Multiple Shifts", "Names", "Empty Cells"],
-            "Instructions": [
-                "Use AM/PM (e.g., 8am-11am or 1:30 PM - 4 PM)",
-                "Separate shifts with a semicolon (;) or 'and'",
-                "Use the Full Name as it appears in the Priority List",
-                "Leave blank or type 'Not Available' if they cannot work"
-            ]
-        }
+        instr_data = {"Guide": ["Use AM/PM", "Use Full Names"], "Instructions": ["e.g. 8am-4pm", "Matches Priority List"]}
         pd.DataFrame(instr_data).to_excel(writer, index=False, sheet_name='INSTRUCTIONS')
     return output.getvalue()
 
-# --- SIDEBAR SETTINGS ---
+# --- 4. SIDEBAR (The "Settings" Area) ---
 with st.sidebar:
-    st.image("https://brand.osu.edu/assets/site/logo.png", width=100) # Simple OSU Logo placeholder
-    st.header("⚙️ Scheduler Settings")
+    # Visual "Settings" Header for users
+    st.markdown("# ⚙️ SETTINGS")
+    st.write("---")
     
-    # Template Download Section
-    st.subheader("1. Get the Template")
-    st.info("Download this first if you need the correct Excel format.")
-    template_file = generate_template()
-    st.download_button(
-        label="📥 Download Excel Template",
-        data=template_file,
-        file_name="Practice_Availability_Template.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.subheader("📄 1. Get Template")
+    st.download_button("Download Excel Template", generate_template(), "OSU_Template.xlsx")
     
-    st.divider()
-    
-    st.subheader("2. Priority Staff")
+    st.subheader("🔑 2. Priority Staff")
     default_priority = "Trenton Wells, Madison Herbert, Joaquin Lira, Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman"
-    priority_input = st.text_area("Full names (comma separated):", default_priority)
+    priority_input = st.text_area("Full names:", default_priority)
     PRIORITY_FULL_NAMES = [p.strip() for p in priority_input.split(",") if p.strip()]
     
-    st.divider()
-    
-    st.subheader("3. Lane Counts")
-    num_recruit_lanes = st.number_input("Recruit Lanes:", min_value=0, max_value=20, value=8)
-    num_floater_lanes = st.number_input("Floater Lanes:", min_value=0, max_value=20, value=5)
+    st.subheader("🏟️ 3. Lane Counts")
+    num_recruit_lanes = st.number_input("Recruit Lanes:", value=8)
+    num_floater_lanes = st.number_input("Floater Lanes:", value=5)
 
 # --- CORE LOGIC FUNCTIONS ---
 def parse_time(t_str):
