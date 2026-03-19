@@ -16,14 +16,10 @@ st.markdown("""
     }
     .main-title { color: #bb0000; font-size: 42px; font-weight: bold; margin-bottom: 0px; }
     .sub-title { color: #666666; font-size: 20px; font-style: italic; margin-top: 0px; }
-    /* Visual "Settings" hint */
-    [data-testid="stSidebarNav"]::before {
-        content: "SETTINGS ⚙️";
-        margin-left: 20px;
-        margin-top: 20px;
-        font-size: 1.5rem;
-        font-weight: bold;
+    /* Sidebar Label Styling */
+    [data-testid="stSidebar"] h1 {
         color: #bb0000;
+        font-size: 1.8rem;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -35,7 +31,107 @@ with col2:
     st.markdown('<p class="main-title">OHIO STATE FOOTBALL</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">Spring Practice Staffing Operations</p>', unsafe_allow_html=True)
 
-# --- 2. TEMPLATE GENERATOR ---
+# --- 2. CORE SCHEDULING LOGIC FUNCTIONS ---
+def parse_time(t_str):
+    if not t_str or pd.isna(t_str): return None
+    t_str = str(t_str).strip().upper().replace('.', '')
+    if any(x in t_str for x in ["EOD", "END", "4PM", "4:00PM"]):
+        return time(16, 0)
+    for fmt in ("%I:%M %p", "%I %p", "%I:%M%p", "%I%p", "%H:%M", "%H"):
+        try:
+            return datetime.strptime(t_str, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+def time_to_min(t):
+    return t.hour * 60 + t.minute
+
+def get_availability_minutes(avail_string):
+    if pd.isna(avail_string) or "Not Available" in str(avail_string):
+        return set()
+    minutes = set()
+    text = str(avail_string).replace(';', '|').replace('and', '|').replace(',', '|')
+    for seg in text.split('|'):
+        if '-' in seg:
+            try:
+                parts = seg.split('-')
+                start_t = parse_time(parts[0].strip())
+                end_raw = parts[1].split('(')[0].strip()
+                end_t = parse_time(end_raw)
+                if start_t and end_t:
+                    s, e = time_to_min(start_t), time_to_min(end_t)
+                    if e > s:
+                        for m in range(s, e): minutes.add(m)
+            except: continue
+    return minutes
+
+def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
+    lane_schedule = []
+    curr = start_min
+    last_person = None
+    while curr < end_min:
+        best_person = None
+        target_pool = None
+        for pool in [primary_pool, secondary_pool]:
+            if last_person in pool and curr in pool[last_person]:
+                best_person = last_person
+                target_pool = pool
+                break
+        if not best_person:
+            longest_stretch = -1
+            for pool in [primary_pool, secondary_pool]:
+                for name, mins in pool.items():
+                    if curr in mins:
+                        stretch = 0
+                        for m in range(curr, end_min):
+                            if m in mins: stretch += 1
+                            else: break
+                        if stretch > longest_stretch:
+                            longest_stretch = stretch
+                            best_person = name
+                            target_pool = pool
+                if best_person: break 
+        if best_person:
+            stretch = 0
+            for m in range(curr, end_min):
+                if m in target_pool[best_person]: stretch += 1
+                else: break
+            seg_end = curr + stretch
+            lane_schedule.append({'name': best_person, 'start': curr, 'end': seg_end})
+            for m in range(curr, seg_end):
+                target_pool[best_person].remove(m)
+            last_person = best_person
+            curr = seg_end
+        else:
+            next_start = end_min
+            for p in [primary_pool, secondary_pool]:
+                for mins in p.values():
+                    future = [m for m in mins if m > curr]
+                    if future: next_start = min(next_start, min(future))
+            lane_schedule.append({'name': 'GAP', 'start': curr, 'end': next_start})
+            last_person = None
+            curr = next_start
+    return lane_schedule
+
+def format_cell(lane_data, b_start_str, b_end_str):
+    s_m, e_m = time_to_min(parse_time(b_start_str)), time_to_min(parse_time(b_end_str))
+    entries = []
+    for seg in lane_data:
+        overlap_s, overlap_e = max(s_m, seg['start']), min(e_m, seg['end'])
+        if overlap_s < overlap_e:
+            h1, m1 = (overlap_s // 60), (overlap_s % 60)
+            h2, m2 = (overlap_e // 60), (overlap_e % 60)
+            t1 = f"{(h1-1)%12+1}:{m1:02d}"
+            t2 = f"{(h2-1)%12+1}:{m2:02d}"
+            entries.append(f"{seg['name']} ({t1}-{t2})")
+    return " / ".join(entries) if entries else "⚠️ GAP"
+
+def style_gaps(val):
+    color = '#ff4b4b33' if isinstance(val, str) and "⚠️ GAP" in val else ''
+    return f'background-color: {color}'
+
+# --- 3. TEMPLATE GENERATOR ---
 def generate_template():
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -45,22 +141,23 @@ def generate_template():
         pd.DataFrame(instr).to_excel(writer, index=False, sheet_name='Instructions')
     return output.getvalue()
 
-# --- 3. SIDEBAR SETTINGS ---
+# --- 4. SIDEBAR SETTINGS ---
 with st.sidebar:
-    st.header("📋 Admin Controls")
+    st.markdown("# ⚙️ SETTINGS")
+    st.write("---")
+    st.subheader("📄 1. Get Template")
     st.download_button("📥 Download Excel Template", generate_template(), "OSU_Football_Template.xlsx")
     
     st.divider()
-    priority_input = st.text_area("Priority Staff (Full Names):", 
+    st.subheader("🔑 2. Priority Staff")
+    priority_input = st.text_area("Full names (comma separated):", 
         "Trenton Wells, Madison Herbert, Joaquin Lira, Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman")
     PRIORITY_NAMES = [p.strip() for p in priority_input.split(",") if p.strip()]
     
+    st.divider()
+    st.subheader("🏟️ 3. Lane Counts")
     num_recruit = st.number_input("Recruit Lanes:", value=8)
     num_floater = st.number_input("Floater Lanes:", value=5)
-
-# --- 4. CORE SCHEDULING LOGIC ---
-# (Keep your existing parse_time, time_to_min, get_availability_minutes, and build_lane_sticky functions here)
-# [Paste those 4 functions from your previous code here]
 
 # --- 5. MAIN PROCESSING ---
 file = st.file_uploader("Upload Practice Availability", type="xlsx")
@@ -83,10 +180,8 @@ if file:
     for i in range(num_floater):
         all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, 360, 960)})
 
-    # DISPLAY TABLE
     BLOCKS = [("6:00 AM", "8:00 AM"), ("8:00 AM", "10:00 AM"), ("10:00 AM", "12:00 PM"), ("12:00 PM", "2:00 PM"), ("2:00 PM", "4:00 PM")]
-    rows = []
-    staff_summary = {} # To track who is working where
+    rows, staff_summary = [], {}
 
     for lane in all_lanes:
         r = {"Lane": lane['type']}
@@ -94,7 +189,6 @@ if file:
             r[f"{b_s}-{b_e}"] = format_cell(lane['data'], b_s, b_e)
         rows.append(r)
         
-        # Build the Roster List
         for seg in lane['data']:
             if seg['name'] != 'GAP':
                 name = seg['name']
@@ -107,10 +201,9 @@ if file:
     st.subheader("🏈 Generated Practice Grid")
     st.dataframe(pd.DataFrame(rows).style.map(style_gaps), use_container_width=True)
 
-    # --- 6. MASTER STAFF ROSTER ---
     st.divider()
     st.subheader("📋 Master Staffing Roster")
-    st.write("Complete list of everyone scheduled for today's practice:")
+    st.write("Current list of everyone scheduled:")
     
     roster_data = []
     for name, info in staff_summary.items():
@@ -120,12 +213,15 @@ if file:
             "Assigned Lanes": ", ".join(sorted(list(info["Lanes"])))
         })
     
-    roster_df = pd.DataFrame(roster_data).sort_values("Staff Member")
-    st.table(roster_df) # Using st.table for a clean, non-scrollable list
-
-    # DOWNLOAD FINAL
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine='openpyxl') as writer:
-        pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
-        roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
-    st.download_button("💾 Save Full Report to Excel", out.getvalue(), "OSU_Football_Practice_Report.xlsx")
+    if roster_data:
+        roster_df = pd.DataFrame(roster_data).sort_values("Staff Member")
+        st.table(roster_df)
+        
+        # FINAL DOWNLOAD
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as writer:
+            pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
+            roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
+        st.download_button("💾 Save Final Report to Excel", out.getvalue(), "OSU_Football_Report.xlsx")
+    else:
+        st.warning("No staff members could be scheduled with the current availability.")
