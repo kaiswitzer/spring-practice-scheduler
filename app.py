@@ -57,7 +57,8 @@ def get_availability_minutes(avail_string):
     if pd.isna(avail_string): return set()
     str_val = str(avail_string).strip().lower()
     
-    if "all day" in str_val:
+    # FIX: Only trigger "All Day" if the cell IS "Available all day"
+    if str_val in ["available all day!", "available all day", "all day"]:
         return set(range(360, 960)) # 6 AM to 4 PM
         
     if "not available" in str_val:
@@ -74,8 +75,10 @@ def get_availability_minutes(avail_string):
                 end_t = parse_time(end_raw)
                 if start_t and end_t:
                     s, e = time_to_min(start_t), time_to_min(end_t)
-                    if e > s:
-                        for m in range(s, e): minutes.add(m)
+                    s_clip = max(360, s)
+                    e_clip = min(960, e)
+                    if e_clip > s_clip:
+                        for m in range(s_clip, e_clip): minutes.add(m)
             except: continue
     return minutes
 
@@ -113,7 +116,7 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
             seg_end = curr + stretch
             lane_schedule.append({'name': best_person, 'start': curr, 'end': seg_end})
             for m in range(curr, seg_end):
-                target_pool[best_person].remove(m)
+                target_pool[best_person].discard(m)
             last_person = best_person
             curr = seg_end
         else:
