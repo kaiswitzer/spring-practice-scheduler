@@ -8,42 +8,36 @@ st.set_page_config(page_title="OSU Football Practice Scheduler", layout="wide", 
 
 st.markdown("""
     <style>
-    /* Change Button Colors to Scarlet */
+    /* BUTTON STYLING */
     .stButton>button, .stDownloadButton>button {
         background-color: #bb0000 !important;
         color: white !important;
         border-radius: 4px;
         font-weight: bold;
     }
+
+    /* TITLES & SUBTITLES */
     .main-title { color: #bb0000; font-size: 42px; font-weight: bold; margin-bottom: 0px; }
     .sub-title { color: #666666; font-size: 20px; font-style: italic; margin-top: 0px; }
     
-    /* FIX 1: Adding "Settings" text next to the Sidebar toggle arrow button */
-    [data-testid="stSidebarCollapseButton"]::after {
-        content: " Settings";
-        font-size: 14px;
-        font-weight: bold;
-        color: #bb0000;
-        vertical-align: middle;
-    }
-    
-    /* Sidebar Header Styling */
-    [data-testid="stSidebar"] h1 {
-        color: #bb0000;
-        font-size: 1.8rem;
+    /* LOGO ALIGNMENT */
+    [data-testid="stVerticalBlock"] img {
+        margin-top: -10px;
     }
     </style>
     """, unsafe_allow_html=True)
 
+# --- LOGO & HEADER ---
 col1, col2 = st.columns([1, 5])
 with col1:
-    # FIX 2: Highly accessible public Block O logo
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Ohio_State_Buckeyes_logo.svg/200px-Ohio_State_Buckeyes_logo.svg.png", width=100)
 with col2:
     st.markdown('<p class="main-title">OHIO STATE FOOTBALL</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">Spring Practice Staffing Operations</p>', unsafe_allow_html=True)
 
-# --- 2. CORE SCHEDULING LOGIC FUNCTIONS ---
+st.divider()
+
+# --- 2. CORE SCHEDULING LOGIC ---
 def parse_time(t_str):
     if not t_str or pd.isna(t_str): return None
     t_str = str(t_str).strip().upper().replace('.', '')
@@ -61,12 +55,10 @@ def time_to_min(t):
 
 def get_availability_minutes(avail_string):
     if pd.isna(avail_string): return set()
-    
-    # FIX 3: Handle "Available all day!" and variations
     str_val = str(avail_string).strip().lower()
+    
     if "all day" in str_val:
-        # Full practice day is 6:00 AM (360 mins) to 4:00 PM (960 mins)
-        return set(range(360, 960))
+        return set(range(360, 960)) # 6 AM to 4 PM
         
     if "not available" in str_val:
         return set()
@@ -158,14 +150,12 @@ def generate_template():
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         example = {"Staff Name": ["Kai Switzer", "Madison Herbert"], "Availability": ["8am-4pm", "Available all day!"]}
         pd.DataFrame(example).to_excel(writer, index=False, sheet_name='Data_Entry')
-        instr = {"Format": ["Times", "All Day", "Names"], "Notes": ["Use AM/PM (8am-12pm)", "Type 'Available all day!' for full shift", "Use Full Names only"]}
+        instr = {"Requirement": ["Times", "All Day", "Names"], "Instructions": ["8am-12pm", "Type 'Available all day!'", "Full Names only"]}
         pd.DataFrame(instr).to_excel(writer, index=False, sheet_name='Instructions')
     return output.getvalue()
 
-# --- 4. SIDEBAR SETTINGS ---
-with st.sidebar:
-    st.markdown("# ⚙️ SETTINGS")
-    st.write("---")
+# --- 4. MAIN PAGE SETTINGS (EXPANDABLE) ---
+with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
     st.subheader("📄 1. Get Template")
     st.download_button("📥 Download Excel Template", generate_template(), "OSU_Football_Template.xlsx")
     
@@ -177,8 +167,13 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🏟️ 3. Lane Counts")
-    num_recruit = st.number_input("Recruit Lanes:", value=8)
-    num_floater = st.number_input("Floater Lanes:", value=5)
+    num_col1, num_col2 = st.columns(2)
+    with num_col1:
+        num_recruit = st.number_input("Recruit Lanes:", value=8)
+    with num_col2:
+        num_floater = st.number_input("Floater Lanes:", value=5)
+
+st.write("") # Just a spacer
 
 # --- 5. MAIN PROCESSING ---
 file = st.file_uploader("Upload Practice Availability", type="xlsx")
@@ -224,7 +219,7 @@ if file:
 
     st.divider()
     st.subheader("📋 Master Staffing Roster")
-    st.write("Current list of everyone scheduled:")
+    st.write("Complete list of staff assignments:")
     
     roster_data = []
     for name, info in staff_summary.items():
@@ -245,4 +240,4 @@ if file:
             roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
         st.download_button("💾 Save Final Report to Excel", out.getvalue(), "OSU_Football_Report.xlsx")
     else:
-        st.warning("No staff members could be scheduled with the current availability.")
+        st.warning("No staff members could be scheduled. Check the availability format in your upload.")
