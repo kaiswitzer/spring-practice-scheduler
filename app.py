@@ -8,6 +8,7 @@ st.set_page_config(page_title="OSU Football Practice Scheduler", layout="wide", 
 
 st.markdown("""
     <style>
+    /* Change Button Colors to Scarlet */
     .stButton>button, .stDownloadButton>button {
         background-color: #bb0000 !important;
         color: white !important;
@@ -16,7 +17,17 @@ st.markdown("""
     }
     .main-title { color: #bb0000; font-size: 42px; font-weight: bold; margin-bottom: 0px; }
     .sub-title { color: #666666; font-size: 20px; font-style: italic; margin-top: 0px; }
-    /* Sidebar Label Styling */
+    
+    /* FIX 1: Adding "Settings" text next to the Sidebar toggle arrow button */
+    [data-testid="stSidebarCollapseButton"]::after {
+        content: " Settings";
+        font-size: 14px;
+        font-weight: bold;
+        color: #bb0000;
+        vertical-align: middle;
+    }
+    
+    /* Sidebar Header Styling */
     [data-testid="stSidebar"] h1 {
         color: #bb0000;
         font-size: 1.8rem;
@@ -26,7 +37,8 @@ st.markdown("""
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    st.image("https://brand.osu.edu/assets/site/logo.png", width=100)
+    # FIX 2: Highly accessible public Block O logo
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Ohio_State_Buckeyes_logo.svg/200px-Ohio_State_Buckeyes_logo.svg.png", width=100)
 with col2:
     st.markdown('<p class="main-title">OHIO STATE FOOTBALL</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">Spring Practice Staffing Operations</p>', unsafe_allow_html=True)
@@ -48,10 +60,19 @@ def time_to_min(t):
     return t.hour * 60 + t.minute
 
 def get_availability_minutes(avail_string):
-    if pd.isna(avail_string) or "Not Available" in str(avail_string):
+    if pd.isna(avail_string): return set()
+    
+    # FIX 3: Handle "Available all day!" and variations
+    str_val = str(avail_string).strip().lower()
+    if "all day" in str_val:
+        # Full practice day is 6:00 AM (360 mins) to 4:00 PM (960 mins)
+        return set(range(360, 960))
+        
+    if "not available" in str_val:
         return set()
+        
     minutes = set()
-    text = str(avail_string).replace(';', '|').replace('and', '|').replace(',', '|')
+    text = str_val.replace(';', '|').replace('and', '|').replace(',', '|')
     for seg in text.split('|'):
         if '-' in seg:
             try:
@@ -135,9 +156,9 @@ def style_gaps(val):
 def generate_template():
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        example = {"Staff Name": ["Kai Switzer", "Madison Herbert"], "Availability": ["8am-4pm", "6am-10am; 2pm-4pm"]}
+        example = {"Staff Name": ["Kai Switzer", "Madison Herbert"], "Availability": ["8am-4pm", "Available all day!"]}
         pd.DataFrame(example).to_excel(writer, index=False, sheet_name='Data_Entry')
-        instr = {"Format": ["Times", "Names"], "Notes": ["Use AM/PM (8am-12pm)", "Use Full Names only"]}
+        instr = {"Format": ["Times", "All Day", "Names"], "Notes": ["Use AM/PM (8am-12pm)", "Type 'Available all day!' for full shift", "Use Full Names only"]}
         pd.DataFrame(instr).to_excel(writer, index=False, sheet_name='Instructions')
     return output.getvalue()
 
