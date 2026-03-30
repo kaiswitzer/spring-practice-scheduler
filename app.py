@@ -90,21 +90,17 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
         best_person = None
         target_pool = None
         
-        # 1. Try to keep the last person scheduled to reduce handoffs
         for pool in [primary_pool, secondary_pool]:
             if last_person in pool and curr in pool[last_person]:
                 stretch = 0
                 for m in range(curr, end_min):
                     if m in pool[last_person]: stretch += 1
                     else: break
-                
-                # Only use them if they can fulfill at least the minimum shift length
                 if stretch >= min_minutes:
                     best_person = last_person
                     target_pool = pool
                     break
         
-        # 2. If the last person can't take it, search for the best candidate
         if not best_person:
             longest_stretch = -1
             for pool in [primary_pool, secondary_pool]:
@@ -114,15 +110,12 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
                         for m in range(curr, end_min):
                             if m in mins: stretch += 1
                             else: break
-                        
-                        # Candidate must meet minimum hours to be placed
                         if stretch >= min_minutes and stretch > longest_stretch:
                             longest_stretch = stretch
                             best_person = name
                             target_pool = pool
                 if best_person: break 
         
-        # 3. Apply the shift if we found someone
         if best_person:
             stretch = 0
             for m in range(curr, end_min):
@@ -135,31 +128,47 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
             last_person = best_person
             curr = seg_end
         else:
-            # No one can fill the minimum requested stretch; look for the next available time
-            next_start = end_min
-            for p in [primary_pool, secondary_pool]:
-                for mins in p.values():
-                    future = [m for m in mins if m > curr]
-                    if future: next_start = min(next_start, min(future))
-            
-            lane_schedule.append({'name': 'GAP', 'start': curr, 'end': next_start})
+            # Shift by 1 minute if no one is available to meet the minimum
+            lane_schedule.append({'name': 'GAP', 'start': curr, 'end': curr + 1})
             last_person = None
-            curr = next_start
+            curr += 1
             
     return lane_schedule
 
 def format_cell(lane_data, b_start_str, b_end_str):
     s_m, e_m = time_to_min(parse_time(b_start_str)), time_to_min(parse_time(b_end_str))
-    entries = []
+    
+    # Filter for segments that fall within this block
+    relevant_segs = []
     for seg in lane_data:
         overlap_s, overlap_e = max(s_m, seg['start']), min(e_m, seg['end'])
         if overlap_s < overlap_e:
-            h1, m1 = (overlap_s // 60), (overlap_s % 60)
-            h2, m2 = (overlap_e // 60), (overlap_e % 60)
-            t1 = f"{(h1-1)%12+1}:{m1:02d}"
-            t2 = f"{(h2-1)%12+1}:{m2:02d}"
-            entries.append(f"{seg['name']} ({t1}-{t2})")
-    return " / ".join(entries) if entries else "⚠️ GAP"
+            relevant_segs.append({'name': seg['name'], 'start': overlap_s, 'end': overlap_e})
+            
+    if not relevant_segs:
+        return "⚠️ GAP"
+
+    # Merge consecutive identical names (especially GAPs)
+    merged = []
+    if relevant_segs:
+        curr_seg = relevant_segs[0].copy()
+        for next_seg in relevant_segs[1:]:
+            if next_seg['name'] == curr_seg['name'] and next_seg['start'] == curr_seg['end']:
+                curr_seg['end'] = next_seg['end']
+            else:
+                merged.append(curr_seg)
+                curr_seg = next_seg.copy()
+        merged.append(curr_seg)
+
+    entries = []
+    for m in merged:
+        h1, m1 = (m['start'] // 60), (m['start'] % 60)
+        h2, m2 = (m['end'] // 60), (m['end'] % 60)
+        t1 = f"{(h1-1)%12+1}:{m1:02d}"
+        t2 = f"{(h2-1)%12+1}:{m2:02d}"
+        entries.append(f"{m['name']} ({t1}-{t2})")
+        
+    return " / ".join(entries)
 
 def style_gaps(val):
     color = '#ff4b4b33' if isinstance(val, str) and "⚠️ GAP" in val else ''
@@ -226,7 +235,6 @@ if file:
         name = str(row.iloc[0]).strip()
         avail_str = str(row.iloc[1])
         
-        # Check for times past practice end
         text = avail_str.strip().lower().replace(';', '|').replace('and', '|').replace(',', '|')
         for seg in text.split('|'):
             if '-' in seg:
@@ -243,7 +251,6 @@ if file:
             p_pool[name] = mins
         else: o_pool[name] = mins
 
-    # Show warnings for data validation
     if warnings:
         with st.container():
             st.warning("⚠️ **Data Validation Alerts:** Possible typos found in the uploaded file.")
@@ -256,7 +263,6 @@ if file:
     for i in range(num_floater):
         all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m, min_m)})
 
-    # Generate dynamic blocks
     BLOCKS = []
     curr = start_m
     while curr < end_m:
@@ -311,7 +317,6 @@ if file:
         roster_df = pd.DataFrame(roster_data).sort_values("Staff Member")
         st.table(roster_df)
         
-        # FINAL DOWNLOAD
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
