@@ -81,18 +81,30 @@ def get_availability_minutes(avail_string, start_m, end_m):
             except: continue
     return minutes
 
-def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
+def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minutes):
     lane_schedule = []
     curr = start_min
     last_person = None
+    
     while curr < end_min:
         best_person = None
         target_pool = None
+        
+        # 1. Try to keep the last person scheduled to reduce handoffs
         for pool in [primary_pool, secondary_pool]:
             if last_person in pool and curr in pool[last_person]:
-                best_person = last_person
-                target_pool = pool
-                break
+                stretch = 0
+                for m in range(curr, end_min):
+                    if m in pool[last_person]: stretch += 1
+                    else: break
+                
+                # Only use them if they can fulfill at least the minimum shift length
+                if stretch >= min_minutes:
+                    best_person = last_person
+                    target_pool = pool
+                    break
+        
+        # 2. If the last person can't take it, search for the best candidate
         if not best_person:
             longest_stretch = -1
             for pool in [primary_pool, secondary_pool]:
@@ -102,11 +114,15 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
                         for m in range(curr, end_min):
                             if m in mins: stretch += 1
                             else: break
-                        if stretch > longest_stretch:
+                        
+                        # Candidate must meet minimum hours to be placed
+                        if stretch >= min_minutes and stretch > longest_stretch:
                             longest_stretch = stretch
                             best_person = name
                             target_pool = pool
                 if best_person: break 
+        
+        # 3. Apply the shift if we found someone
         if best_person:
             stretch = 0
             for m in range(curr, end_min):
@@ -119,14 +135,17 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min):
             last_person = best_person
             curr = seg_end
         else:
+            # No one can fill the minimum requested stretch; look for the next available time
             next_start = end_min
             for p in [primary_pool, secondary_pool]:
                 for mins in p.values():
                     future = [m for m in mins if m > curr]
                     if future: next_start = min(next_start, min(future))
+            
             lane_schedule.append({'name': 'GAP', 'start': curr, 'end': next_start})
             last_person = None
             curr = next_start
+            
     return lane_schedule
 
 def format_cell(lane_data, b_start_str, b_end_str):
@@ -198,6 +217,7 @@ if file:
     
     start_m = time_to_min(practice_start)
     end_m = time_to_min(practice_end)
+    min_m = int(min_hours * 60)
     
     p_pool, o_pool = {}, {}
     warnings = []
@@ -232,9 +252,9 @@ if file:
 
     all_lanes = []
     for i in range(num_recruit):
-        all_lanes.append({"type": f"Recruit Lane {i+1}", "data": build_lane_sticky(o_pool, p_pool, start_m, end_m)})
+        all_lanes.append({"type": f"Recruit Lane {i+1}", "data": build_lane_sticky(o_pool, p_pool, start_m, end_m, min_m)})
     for i in range(num_floater):
-        all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m)})
+        all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m, min_m)})
 
     # Generate dynamic blocks
     BLOCKS = []
