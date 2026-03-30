@@ -53,13 +53,12 @@ def parse_time(t_str):
 def time_to_min(t):
     return t.hour * 60 + t.minute
 
-def get_availability_minutes(avail_string):
+def get_availability_minutes(avail_string, start_m, end_m):
     if pd.isna(avail_string): return set()
     str_val = str(avail_string).strip().lower()
     
-    # FIX: Only trigger "All Day" if the cell IS "Available all day"
     if str_val in ["available all day!", "available all day", "all day"]:
-        return set(range(360, 960)) # 6 AM to 4 PM
+        return set(range(start_m, end_m))
         
     if "not available" in str_val:
         return set()
@@ -75,8 +74,8 @@ def get_availability_minutes(avail_string):
                 end_t = parse_time(end_raw)
                 if start_t and end_t:
                     s, e = time_to_min(start_t), time_to_min(end_t)
-                    s_clip = max(360, s)
-                    e_clip = min(960, e)
+                    s_clip = max(start_m, s)
+                    e_clip = min(end_m, e)
                     if e_clip > s_clip:
                         for m in range(s_clip, e_clip): minutes.add(m)
             except: continue
@@ -176,7 +175,19 @@ with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
     with num_col2:
         num_floater = st.number_input("Floater Lanes:", value=5)
 
-st.write("") # Just a spacer
+    st.divider()
+    st.subheader("⏰ 4. Practice Times")
+    p_col1, p_col2 = st.columns(2)
+    with p_col1:
+        practice_start = st.time_input("Practice Start Time:", value=time(6, 0))
+    with p_col2:
+        practice_end = st.time_input("Practice End Time:", value=time(16, 0))
+
+    st.divider()
+    st.subheader("⚖️ 5. Hour Constraints")
+    min_hours = st.number_input("Minimum Hours per Staff Member:", value=2.0, step=0.5)
+
+st.write("") 
 
 # --- 5. MAIN PROCESSING ---
 file = st.file_uploader("Upload Practice Availability", type="xlsx")
@@ -185,21 +196,60 @@ if file:
     raw_df = pd.read_excel(file)
     df = raw_df.dropna(subset=[raw_df.columns[0]])
     
+    start_m = time_to_min(practice_start)
+    end_m = time_to_min(practice_end)
+    
     p_pool, o_pool = {}, {}
+    warnings = []
+    
     for _, row in df.iterrows():
         name = str(row.iloc[0]).strip()
-        mins = get_availability_minutes(row.iloc[1])
+        avail_str = str(row.iloc[1])
+        
+        # Check for times past practice end
+        text = avail_str.strip().lower().replace(';', '|').replace('and', '|').replace(',', '|')
+        for seg in text.split('|'):
+            if '-' in seg:
+                try:
+                    parts = seg.split('-')
+                    end_raw = parts[1].split('(')[0].strip()
+                    end_t = parse_time(end_raw)
+                    if end_t and time_to_min(end_t) > end_m:
+                        warnings.append(f"🔍 **{name}** listed availability until {end_raw.upper()}, which exceeds the scheduled practice end time.")
+                except: continue
+                
+        mins = get_availability_minutes(avail_str, start_m, end_m)
         if any(pn.lower() in name.lower() for pn in PRIORITY_NAMES):
             p_pool[name] = mins
         else: o_pool[name] = mins
 
+    # Show warnings for data validation
+    if warnings:
+        with st.container():
+            st.warning("⚠️ **Data Validation Alerts:** Possible typos found in the uploaded file.")
+            for w in warnings:
+                st.write(w)
+
     all_lanes = []
     for i in range(num_recruit):
-        all_lanes.append({"type": f"Recruit Lane {i+1}", "data": build_lane_sticky(o_pool, p_pool, 360, 960)})
+        all_lanes.append({"type": f"Recruit Lane {i+1}", "data": build_lane_sticky(o_pool, p_pool, start_m, end_m)})
     for i in range(num_floater):
-        all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, 360, 960)})
+        all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m)})
 
-    BLOCKS = [("6:00 AM", "8:00 AM"), ("8:00 AM", "10:00 AM"), ("10:00 AM", "12:00 PM"), ("12:00 PM", "2:00 PM"), ("2:00 PM", "4:00 PM")]
+    # Generate dynamic blocks
+    BLOCKS = []
+    curr = start_m
+    while curr < end_m:
+        nxt = min(curr + 120, end_m)
+        def fmt_time(minutes):
+            h, m = minutes // 60, minutes % 60
+            suffix = "AM" if h < 12 else "PM"
+            display_h = h if h <= 12 else h - 12
+            if display_h == 0: display_h = 12
+            return f"{display_h}:{m:02d} {suffix}"
+        BLOCKS.append((fmt_time(curr), fmt_time(nxt)))
+        curr = nxt
+
     rows, staff_summary = [], {}
 
     for lane in all_lanes:
@@ -226,9 +276,14 @@ if file:
     
     roster_data = []
     for name, info in staff_summary.items():
+        total_hrs = round(info["Total Hours"], 2)
+        status = ""
+        if total_hrs < min_hours:
+            status = "⚠️ Under Minimum"
         roster_data.append({
             "Staff Member": name,
-            "Total Hours": round(info["Total Hours"], 2),
+            "Total Hours": total_hrs,
+            "Status": status,
             "Assigned Lanes": ", ".join(sorted(list(info["Lanes"])))
         })
     
