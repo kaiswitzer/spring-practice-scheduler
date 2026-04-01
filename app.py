@@ -3,6 +3,38 @@ import pandas as pd
 from datetime import datetime, time
 import io
 
+# --- ALL FUNCTIONS DEFINED FIRST ---
+# Python reads top to bottom, so every function must be defined before it's called.
+# Think of this section like your static methods in Java — defined once, usable anywhere below.
+
+# --- TEMPLATE GENERATOR ---
+# Defined here at the top so it's available when the download button renders in the UI.
+def generate_template():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # No header row — matches exactly how the master sheet tabs are structured
+        example_data = {
+            "A": ["Kai Switzer", "Madison Herbert", "Trenton Wells"],
+            "B": ["8am-4pm", "Available all day!", "10am-2pm"]
+        }
+        pd.DataFrame(example_data).to_excel(writer, index=False, header=False, sheet_name='Data_Entry')
+
+        instructions = {
+            "Step": ["1", "2", "3", "4", "5", "—", "—", "—"],
+            "What To Do": [
+                "Open the master availability Excel file",
+                "Click the tab for today's practice date",
+                "Select all rows in Column A (names) and Column B (availability)",
+                "Copy and paste into cell A1 of this template file (Data_Entry tab)",
+                "Save this file and upload it to the scheduling tool",
+                "FORMAT REMINDER: Column A = full staff name",
+                "FORMAT REMINDER: Column B = availability, e.g. '8am-4pm' or 'Available all day!'",
+                "FORMAT REMINDER: No header row needed — start data in row 1"
+            ]
+        }
+        pd.DataFrame(instructions).to_excel(writer, index=False, sheet_name='Instructions')
+    return output.getvalue()
+
 # --- 1. OSU FOOTBALL BRANDING ---
 st.set_page_config(page_title="OSU Football Practice Scheduler", layout="wide", page_icon="🏈")
 
@@ -53,15 +85,29 @@ Each tab in the master sheet represents one practice date. Click the tab for the
 <b>Step 3 — Copy the Two Columns</b><br>
 Select <b>all rows in Column A (names) and Column B (availability)</b>. Do not include a header row — just the data.<br><br>
 
-<b>Step 4 — Paste Into a New Excel File</b><br>
-Open a blank Excel file, paste into cell A1, and save it as a <b>.xlsx</b> file on your computer.<br><br>
+<b>Step 4 — Paste Into the Template & Save</b><br>
+Download the template below, open it, and paste your data into cell A1 of the <b>Data_Entry</b> tab. Save the file as <b>.xlsx</b> on your computer.<br><br>
 
 <b>Step 5 — Upload Below</b><br>
-Use the file uploader on this page to upload your new file. The schedule will generate automatically.<br><br>
+Use the file uploader on this page to upload your saved file. The schedule will generate automatically.<br><br>
+
+<b>Step 6 — Adjust Settings if Needed (optional)</b><br>
+Click <b>⚙️ SETTINGS & CONTROLS</b> above the upload button to customize the schedule:<br>
+&nbsp;&nbsp;• <b>Priority Staff</b> — names listed here get assigned to Floater Lanes first. Edit to match your current roster.<br>
+&nbsp;&nbsp;• <b>Recruit Lanes / Floater Lanes</b> — set how many of each lane type to generate.<br>
+&nbsp;&nbsp;• <b>Practice Start &amp; End Time</b> — set the window the scheduler should fill. Availability outside this window is ignored.<br>
+&nbsp;&nbsp;• <b>Minimum Hours</b> — any staff member scheduled for less than this amount will be not included or flagged ⚠️ in the roster.<br><br>
+            
+<b>Step 7 — Download Results</b><br>
+Scroll to the bottom of the page and click the "💾 Download Finished Schedule" button to download the generated schedule. The downloaded file will go to your downloads folder <br><br>
 
 <b>Format reminder:</b> Column A = staff name, Column B = their availability (e.g. <i>8am-4pm</i> or <i>Available all day!</i>). No headers needed.
 </div>
 """, unsafe_allow_html=True)
+
+# CHANGED: Template download moved here from inside the expander so it sits
+# right after Step 4 where the instructions reference it.
+st.download_button("📥 Download Excel Template", generate_template(), "OSU_Football_Template.xlsx")
 
 st.divider()
 
@@ -218,48 +264,17 @@ def style_gaps(val):
     color = '#ff4b4b33' if isinstance(val, str) and "⚠️ GAP" in val else ''
     return f'background-color: {color}'
 
-# --- 3. TEMPLATE GENERATOR ---
-# CHANGED: Instructions tab is now a real step-by-step guide.
-# Data_Entry tab uses header=False to match the headerless master sheet format.
-def generate_template():
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # No header row — matches exactly how the master sheet tabs are structured
-        example_data = {
-            "A": ["Kai Switzer", "Madison Herbert", "Trenton Wells"],
-            "B": ["8am-4pm", "Available all day!", "10am-2pm"]
-        }
-        pd.DataFrame(example_data).to_excel(writer, index=False, header=False, sheet_name='Data_Entry')
-
-        instructions = {
-            "Step": ["1", "2", "3", "4", "5", "—", "—", "—"],
-            "What To Do": [
-                "Open the master availability Excel file",
-                "Click the tab for today's practice date",
-                "Select all rows in Column A (names) and Column B (availability)",
-                "Copy and paste into cell A1 of this template file (Data_Entry tab)",
-                "Save this file and upload it to the scheduling tool",
-                "FORMAT REMINDER: Column A = full staff name",
-                "FORMAT REMINDER: Column B = availability, e.g. '8am-4pm' or 'Available all day!'",
-                "FORMAT REMINDER: No header row needed — start data in row 1"
-            ]
-        }
-        pd.DataFrame(instructions).to_excel(writer, index=False, sheet_name='Instructions')
-    return output.getvalue()
-
 # --- 4. MAIN PAGE SETTINGS (EXPANDABLE) ---
+# CHANGED: Template download removed from here — it now lives above with the instructions.
+# Remaining sections renumbered 1–4.
 with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
-    st.subheader("📄 1. Get Template")
-    st.download_button("📥 Download Excel Template", generate_template(), "OSU_Football_Template.xlsx")
-
-    st.divider()
-    st.subheader("🔑 2. Priority Staff")
+    st.subheader("🔑 1. Priority Staff")
     priority_input = st.text_area("Full names (comma separated):",
         "Trenton Wells, Madison Herbert, Joaquin Lira, Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman")
     PRIORITY_NAMES = [p.strip() for p in priority_input.split(",") if p.strip()]
 
     st.divider()
-    st.subheader("🏟️ 3. Lane Counts")
+    st.subheader("🏟️ 2. Lane Counts")
     num_col1, num_col2 = st.columns(2)
     with num_col1:
         num_recruit = st.number_input("Recruit Lanes:", value=8)
@@ -267,7 +282,7 @@ with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
         num_floater = st.number_input("Floater Lanes:", value=5)
 
     st.divider()
-    st.subheader("⏰ 4. Practice Times")
+    st.subheader("⏰ 3. Practice Times")
     p_col1, p_col2 = st.columns(2)
     with p_col1:
         practice_start = st.time_input("Practice Start Time:", value=time(6, 0))
@@ -275,7 +290,7 @@ with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
         practice_end = st.time_input("Practice End Time:", value=time(16, 0))
 
     st.divider()
-    st.subheader("⚖️ 5. Hour Constraints")
+    st.subheader("⚖️ 4. Hour Constraints")
     min_hours = st.number_input("Minimum Hours per Staff Member:", value=2.0, step=0.5)
 
 st.write("")
@@ -386,6 +401,6 @@ if file:
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
             roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
-        st.download_button("💾 Save Final Report to Excel", out.getvalue(), "OSU_Football_Report.xlsx")
+        st.download_button("💾 Download Finished Schedule", out.getvalue(), "OSU_Football_Report.xlsx")
     else:
         st.warning("No staff members could be scheduled. Check the availability format in your upload.")
