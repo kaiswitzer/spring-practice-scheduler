@@ -8,21 +8,23 @@ st.set_page_config(page_title="OSU Football Practice Scheduler", layout="wide", 
 
 st.markdown("""
     <style>
-    /* BUTTON STYLING */
     .stButton>button, .stDownloadButton>button {
         background-color: #bb0000 !important;
         color: white !important;
         border-radius: 4px;
         font-weight: bold;
     }
-
-    /* TITLES & SUBTITLES */
     .main-title { color: #bb0000; font-size: 42px; font-weight: bold; margin-bottom: 0px; }
     .sub-title { color: #666666; font-size: 20px; font-style: italic; margin-top: 0px; }
-    
-    /* LOGO ALIGNMENT */
-    [data-testid="stVerticalBlock"] img {
-        margin-top: -10px;
+    [data-testid="stVerticalBlock"] img { margin-top: -10px; }
+
+    /* NEW: instruction box styling */
+    .instruction-box {
+        background-color: #f9f9f9;
+        border-left: 5px solid #bb0000;
+        padding: 16px 20px;
+        border-radius: 4px;
+        margin-bottom: 16px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -37,7 +39,44 @@ with col2:
 
 st.divider()
 
+# --- NEW: ALWAYS-VISIBLE HOW-TO INSTRUCTIONS ---
+# Sits at the top so every user sees it before doing anything.
+st.markdown("### 📋 How to Use This Tool")
+st.markdown("""
+<div class="instruction-box">
+<b>Step 1 — Open the Master Availability Sheet</b><br>
+Open the shared Excel file that contains all staff availability.<br><br>
+
+<b>Step 2 — Find Today's Tab</b><br>
+Each tab in the master sheet represents one practice date. Click the tab for the practice you are scheduling.<br><br>
+
+<b>Step 3 — Copy the Two Columns</b><br>
+Select <b>all rows in Column A (names) and Column B (availability)</b>. Do not include a header row — just the data.<br><br>
+
+<b>Step 4 — Paste Into a New Excel File</b><br>
+Open a blank Excel file, paste into cell A1, and save it as a <b>.xlsx</b> file on your computer.<br><br>
+
+<b>Step 5 — Upload Below</b><br>
+Use the file uploader on this page to upload your new file. The schedule will generate automatically.<br><br>
+
+<b>Format reminder:</b> Column A = staff name, Column B = their availability (e.g. <i>8am-4pm</i> or <i>Available all day!</i>). No headers needed.
+</div>
+""", unsafe_allow_html=True)
+
+st.divider()
+
 # --- 2. CORE SCHEDULING LOGIC ---
+
+# FIXED: fmt_time moved here, outside all loops.
+# Before, it was redefined every iteration of the while loop below — wasteful and error-prone.
+# Now it's defined once and reused anywhere in the file, just like a static helper method in Java.
+def fmt_time(minutes):
+    h, m = minutes // 60, minutes % 60
+    suffix = "AM" if h < 12 else "PM"
+    display_h = h if h <= 12 else h - 12
+    if display_h == 0: display_h = 12
+    return f"{display_h}:{m:02d} {suffix}"
+
 def parse_time(t_str):
     if not t_str or pd.isna(t_str): return None
     t_str = str(t_str).strip().upper().replace('.', '')
@@ -47,7 +86,11 @@ def parse_time(t_str):
         try:
             return datetime.strptime(t_str, fmt).time()
         except ValueError:
+            # Fine to keep bare here — we're intentionally trying multiple formats one by one.
             continue
+    # FIXED: log when no format matched so you know which string was unparseable.
+    # Before, this silently returned None with no indication of what went wrong.
+    print(f"[parse_time] could not parse: '{t_str}'")
     return None
 
 def time_to_min(t):
@@ -56,13 +99,13 @@ def time_to_min(t):
 def get_availability_minutes(avail_string, start_m, end_m):
     if pd.isna(avail_string): return set()
     str_val = str(avail_string).strip().lower()
-    
+
     if str_val in ["available all day!", "available all day", "all day"]:
         return set(range(start_m, end_m))
-        
+
     if "not available" in str_val:
         return set()
-        
+
     minutes = set()
     text = str_val.replace(';', '|').replace('and', '|').replace(',', '|')
     for seg in text.split('|'):
@@ -78,18 +121,22 @@ def get_availability_minutes(avail_string, start_m, end_m):
                     e_clip = min(end_m, e)
                     if e_clip > s_clip:
                         for m in range(s_clip, e_clip): minutes.add(m)
-            except: continue
+            except Exception as e:
+                # FIXED: was bare 'except: continue' — now logs which segment failed.
+                # Check your terminal output when running locally to see these messages.
+                print(f"[parse error in get_availability_minutes] segment='{seg}' error={e}")
+                continue
     return minutes
 
 def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minutes):
     lane_schedule = []
     curr = start_min
     last_person = None
-    
+
     while curr < end_min:
         best_person = None
         target_pool = None
-        
+
         for pool in [primary_pool, secondary_pool]:
             if last_person in pool and curr in pool[last_person]:
                 stretch = 0
@@ -100,7 +147,7 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
                     best_person = last_person
                     target_pool = pool
                     break
-        
+
         if not best_person:
             longest_stretch = -1
             for pool in [primary_pool, secondary_pool]:
@@ -114,8 +161,8 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
                             longest_stretch = stretch
                             best_person = name
                             target_pool = pool
-                if best_person: break 
-        
+                if best_person: break
+
         if best_person:
             stretch = 0
             for m in range(curr, end_min):
@@ -128,27 +175,24 @@ def build_lane_sticky(primary_pool, secondary_pool, start_min, end_min, min_minu
             last_person = best_person
             curr = seg_end
         else:
-            # Shift by 1 minute if no one is available to meet the minimum
             lane_schedule.append({'name': 'GAP', 'start': curr, 'end': curr + 1})
             last_person = None
             curr += 1
-            
+
     return lane_schedule
 
 def format_cell(lane_data, b_start_str, b_end_str):
     s_m, e_m = time_to_min(parse_time(b_start_str)), time_to_min(parse_time(b_end_str))
-    
-    # Filter for segments that fall within this block
+
     relevant_segs = []
     for seg in lane_data:
         overlap_s, overlap_e = max(s_m, seg['start']), min(e_m, seg['end'])
         if overlap_s < overlap_e:
             relevant_segs.append({'name': seg['name'], 'start': overlap_s, 'end': overlap_e})
-            
+
     if not relevant_segs:
         return "⚠️ GAP"
 
-    # Merge consecutive identical names (especially GAPs)
     merged = []
     if relevant_segs:
         curr_seg = relevant_segs[0].copy()
@@ -167,7 +211,7 @@ def format_cell(lane_data, b_start_str, b_end_str):
         t1 = f"{(h1-1)%12+1}:{m1:02d}"
         t2 = f"{(h2-1)%12+1}:{m2:02d}"
         entries.append(f"{m['name']} ({t1}-{t2})")
-        
+
     return " / ".join(entries)
 
 def style_gaps(val):
@@ -175,26 +219,45 @@ def style_gaps(val):
     return f'background-color: {color}'
 
 # --- 3. TEMPLATE GENERATOR ---
+# CHANGED: Instructions tab is now a real step-by-step guide.
+# Data_Entry tab uses header=False to match the headerless master sheet format.
 def generate_template():
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        example = {"Staff Name": ["Kai Switzer", "Madison Herbert"], "Availability": ["8am-4pm", "Available all day!"]}
-        pd.DataFrame(example).to_excel(writer, index=False, sheet_name='Data_Entry')
-        instr = {"Requirement": ["Times", "All Day", "Names"], "Instructions": ["8am-12pm", "Type 'Available all day!'", "Full Names only"]}
-        pd.DataFrame(instr).to_excel(writer, index=False, sheet_name='Instructions')
+        # No header row — matches exactly how the master sheet tabs are structured
+        example_data = {
+            "A": ["Kai Switzer", "Madison Herbert", "Trenton Wells"],
+            "B": ["8am-4pm", "Available all day!", "10am-2pm"]
+        }
+        pd.DataFrame(example_data).to_excel(writer, index=False, header=False, sheet_name='Data_Entry')
+
+        instructions = {
+            "Step": ["1", "2", "3", "4", "5", "—", "—", "—"],
+            "What To Do": [
+                "Open the master availability Excel file",
+                "Click the tab for today's practice date",
+                "Select all rows in Column A (names) and Column B (availability)",
+                "Copy and paste into cell A1 of this template file (Data_Entry tab)",
+                "Save this file and upload it to the scheduling tool",
+                "FORMAT REMINDER: Column A = full staff name",
+                "FORMAT REMINDER: Column B = availability, e.g. '8am-4pm' or 'Available all day!'",
+                "FORMAT REMINDER: No header row needed — start data in row 1"
+            ]
+        }
+        pd.DataFrame(instructions).to_excel(writer, index=False, sheet_name='Instructions')
     return output.getvalue()
 
 # --- 4. MAIN PAGE SETTINGS (EXPANDABLE) ---
 with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
     st.subheader("📄 1. Get Template")
     st.download_button("📥 Download Excel Template", generate_template(), "OSU_Football_Template.xlsx")
-    
+
     st.divider()
     st.subheader("🔑 2. Priority Staff")
-    priority_input = st.text_area("Full names (comma separated):", 
+    priority_input = st.text_area("Full names (comma separated):",
         "Trenton Wells, Madison Herbert, Joaquin Lira, Elisabeth Christina Kearney, Kai Switzer, Reagan Butler, Emma Sherman")
     PRIORITY_NAMES = [p.strip() for p in priority_input.split(",") if p.strip()]
-    
+
     st.divider()
     st.subheader("🏟️ 3. Lane Counts")
     num_col1, num_col2 = st.columns(2)
@@ -215,26 +278,29 @@ with st.expander("⚙️ SETTINGS & CONTROLS (Click to expand)"):
     st.subheader("⚖️ 5. Hour Constraints")
     min_hours = st.number_input("Minimum Hours per Staff Member:", value=2.0, step=0.5)
 
-st.write("") 
+st.write("")
 
 # --- 5. MAIN PROCESSING ---
-file = st.file_uploader("Upload Practice Availability", type="xlsx")
+file = st.file_uploader("📂 Upload Today's Practice Availability (.xlsx)", type="xlsx")
 
 if file:
-    raw_df = pd.read_excel(file)
-    df = raw_df.dropna(subset=[raw_df.columns[0]])
-    
+    # FIXED: header=None tells pandas not to treat row 1 as column names.
+    # Without this, the first staff member's name gets eaten as a column label and lost.
+    # Columns are now referenced by integer index (0, 1) instead of string names.
+    raw_df = pd.read_excel(file, header=None)
+    df = raw_df.dropna(subset=[0])  # drop rows where column A (index 0) is empty
+
     start_m = time_to_min(practice_start)
     end_m = time_to_min(practice_end)
     min_m = int(min_hours * 60)
-    
+
     p_pool, o_pool = {}, {}
     warnings = []
-    
+
     for _, row in df.iterrows():
         name = str(row.iloc[0]).strip()
         avail_str = str(row.iloc[1])
-        
+
         text = avail_str.strip().lower().replace(';', '|').replace('and', '|').replace(',', '|')
         for seg in text.split('|'):
             if '-' in seg:
@@ -243,13 +309,18 @@ if file:
                     end_raw = parts[1].split('(')[0].strip()
                     end_t = parse_time(end_raw)
                     if end_t and time_to_min(end_t) > end_m:
-                        warnings.append(f"🔍 **{name}** listed availability until {end_raw.upper()}, which exceeds the scheduled practice end time.")
-                except: continue
-                
+                        warnings.append(f"🔍 **{name}** listed availability until {end_raw.upper()}, which exceeds practice end time.")
+                except Exception as e:
+                    # FIXED: was bare 'except: continue' — now logs name and segment so you
+                    # know exactly which row in the uploaded file caused the issue.
+                    print(f"[parse error in warnings check] name='{name}' segment='{seg}' error={e}")
+                    continue
+
         mins = get_availability_minutes(avail_str, start_m, end_m)
         if any(pn.lower() in name.lower() for pn in PRIORITY_NAMES):
             p_pool[name] = mins
-        else: o_pool[name] = mins
+        else:
+            o_pool[name] = mins
 
     if warnings:
         with st.container():
@@ -263,16 +334,12 @@ if file:
     for i in range(num_floater):
         all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m, min_m)})
 
+    # FIXED: fmt_time is now defined at the top of the file, not re-created here every loop.
+    # The while loop is now clean — it just calls fmt_time, not defines it.
     BLOCKS = []
     curr = start_m
     while curr < end_m:
         nxt = min(curr + 120, end_m)
-        def fmt_time(minutes):
-            h, m = minutes // 60, minutes % 60
-            suffix = "AM" if h < 12 else "PM"
-            display_h = h if h <= 12 else h - 12
-            if display_h == 0: display_h = 12
-            return f"{display_h}:{m:02d} {suffix}"
         BLOCKS.append((fmt_time(curr), fmt_time(nxt)))
         curr = nxt
 
@@ -283,7 +350,7 @@ if file:
         for b_s, b_e in BLOCKS:
             r[f"{b_s}-{b_e}"] = format_cell(lane['data'], b_s, b_e)
         rows.append(r)
-        
+
         for seg in lane['data']:
             if seg['name'] != 'GAP':
                 name = seg['name']
@@ -299,24 +366,22 @@ if file:
     st.divider()
     st.subheader("📋 Master Staffing Roster")
     st.write("Complete list of staff assignments:")
-    
+
     roster_data = []
     for name, info in staff_summary.items():
         total_hrs = round(info["Total Hours"], 2)
-        status = ""
-        if total_hrs < min_hours:
-            status = "⚠️ Under Minimum"
+        status = "⚠️ Under Minimum" if total_hrs < min_hours else ""
         roster_data.append({
             "Staff Member": name,
             "Total Hours": total_hrs,
             "Status": status,
             "Assigned Lanes": ", ".join(sorted(list(info["Lanes"])))
         })
-    
+
     if roster_data:
         roster_df = pd.DataFrame(roster_data).sort_values("Staff Member")
         st.table(roster_df)
-        
+
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
