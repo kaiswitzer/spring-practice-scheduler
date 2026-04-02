@@ -2,10 +2,202 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time
 import io
+import pdfplumber  # NEW: used to extract text from the guest PDF
 
 # --- ALL FUNCTIONS DEFINED FIRST ---
 # Python reads top to bottom, so every function must be defined before it's called.
 # Think of this section like your static methods in Java — defined once, usable anywhere below.
+
+# --- GUEST MATCHING FUNCTIONS ---
+
+# Maps every US state abbreviation to one of five regions.
+# Think of this like a Java HashMap<String, String>.
+STATE_REGIONS = {
+    "ME": "Northeast", "NH": "Northeast", "VT": "Northeast", "MA": "Northeast",
+    "RI": "Northeast", "CT": "Northeast", "NY": "Northeast", "NJ": "Northeast",
+    "PA": "Northeast",
+    "MD": "Southeast", "DE": "Southeast", "VA": "Southeast", "WV": "Southeast",
+    "NC": "Southeast", "SC": "Southeast", "GA": "Southeast", "FL": "Southeast",
+    "AL": "Southeast", "MS": "Southeast", "TN": "Southeast", "KY": "Southeast",
+    "AR": "Southeast", "LA": "Southeast",
+    "OH": "Midwest", "MI": "Midwest", "IN": "Midwest", "IL": "Midwest",
+    "WI": "Midwest", "MN": "Midwest", "IA": "Midwest", "MO": "Midwest",
+    "ND": "Midwest", "SD": "Midwest", "NE": "Midwest", "KS": "Midwest",
+    "TX": "Southwest", "OK": "Southwest", "NM": "Southwest", "AZ": "Southwest",
+    "CO": "West", "WY": "West", "MT": "West", "ID": "West", "UT": "West",
+    "NV": "West", "CA": "West", "OR": "West", "WA": "West", "AK": "West",
+    "HI": "West"
+}
+
+def parse_location(location_str):
+    """
+    Splits a location string into (city, state, region).
+    Handles TWO formats:
+      - Staff roster:  'Columbus, OH'           comma-separated
+      - Guest PDF:     'Rancho Bernardo (CA)'   state in parentheses at end
+    Returns lowercase city for case-insensitive comparison.
+    """
+    import re
+    if not location_str or pd.isna(location_str):
+        return None, None, None
+    location_str = str(location_str).strip()
+
+    # FIXED: detect guest PDF format — state code in parentheses at end
+    # e.g. 'Rancho Bernardo (CA)' or 'Clovis West (CA)'
+    paren_match = re.search(r'\(([A-Z]{2})\)\s*$', location_str)
+    if paren_match:
+        state = paren_match.group(1).upper()
+        city = location_str[:paren_match.start()].strip().lower()
+        region = STATE_REGIONS.get(state)
+        return city, state, region
+
+    # Staff roster format: 'City, ST'
+    parts = location_str.split(",")
+    city = parts[0].strip().lower() if len(parts) >= 1 else None
+    state = parts[1].strip().upper()[:2] if len(parts) >= 2 else None
+    region = STATE_REGIONS.get(state) if state else None
+    return city, state, region
+
+def extract_guests_from_pdf(pdf_file):
+    """
+    Reads the guest PDF and extracts name (col 1) and location (col 2).
+    Uses pdfplumber to parse the table — works on clean digital PDFs.
+    Returns a list of dicts: [{'name': ..., 'location': ...}, ...]
+    """
+    guests = []
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            table = page.extract_table()
+            if not table:
+                continue
+            for row in table:
+                # Skip empty rows or header rows
+                if not row or not row[0]:
+                    continue
+                name = str(row[0]).strip()
+                location = str(row[1]).strip() if len(row) > 1 else ""
+                # Skip if it looks like a header (contains 'name' or 'guest')
+                if name.lower() in ["name", "guest", "guest name", ""]:
+                    continue
+                guests.append({"name": name, "location": location})
+    return guests
+
+def match_hosts_to_guests(scheduled_names, staff_roster_df, guests):
+    """
+    Matches each scheduled host to one guest using 4-tier location logic:
+      Tier 1: Same city
+      Tier 2: Same state
+      Tier 3: Same region
+      Tier 4: Anyone remaining (unmatched)
+
+    scheduled_names: set of full name strings from the generated schedule
+    staff_roster_df: DataFrame with columns First, Last, Hometown (cols A, B, C)
+    guests: list of dicts from extract_guests_from_pdf()
+
+    Returns a DataFrame with columns: Host, Guest, Host Hometown, Guest Location, Match Quality
+    """
+    # Build a lookup: full name → hometown for scheduled staff only
+    # FIXED: staff roster now read with header=0, so columns are named
+    # 'First Name', 'Last Name', 'Hometown' — use those names directly.
+    host_lookup = {}
+    for _, row in staff_roster_df.iterrows():
+        first = str(row["First Name"]).strip()
+        last = str(row["Last Name"]).strip()
+        full_name = f"{first} {last}"
+        hometown = str(row["Hometown"]).strip()
+        # Only include staff who are actually scheduled today
+        # We check if this name appears anywhere in the scheduled set (case-insensitive)
+        for sched_name in scheduled_names:
+            if full_name.lower() in sched_name.lower() or sched_name.lower() in full_name.lower():
+                host_lookup[sched_name] = hometown
+                break
+
+    # FIXED: multi-pass matching instead of greedy single-pass.
+    # Old approach: loop through hosts in order, each one immediately grabs the
+    # best guest available — so early hosts waste good guests that later hosts need.
+    #
+    # New approach: four separate passes, one per tier. In each pass we only lock
+    # in matches at that quality level. Hosts that didn't match in Pass 1 move to
+    # Pass 2, and so on. No guest is ever assigned to a low-quality match when a
+    # better host for them is still waiting.
+    #
+    # Think of it like a draft: everyone submits their top pick simultaneously,
+    # conflicts are resolved, then everyone submits their second pick, etc.
+
+    available_guests = guests.copy()
+    results = {}  # host_name -> result row, filled across all passes
+    unmatched_hosts = list(host_lookup.items())  # list of (name, hometown) tuples
+
+    # --- Pass 1: Same City ---
+    still_unmatched = []
+    for host_name, host_hometown in unmatched_hosts:
+        h_city, _, _ = parse_location(host_hometown)
+        matched_guest = None
+        for g in available_guests:
+            g_city, _, _ = parse_location(g["location"])
+            if h_city and g_city and h_city == g_city:
+                matched_guest = g
+                break
+        if matched_guest:
+            available_guests.remove(matched_guest)
+            results[host_name] = {"Host": host_name, "Host Hometown": host_hometown,
+                "Guest": matched_guest["name"], "Guest Location": matched_guest["location"],
+                "Match Quality": "✅ Same City"}
+        else:
+            still_unmatched.append((host_name, host_hometown))
+    unmatched_hosts = still_unmatched
+
+    # --- Pass 2: Same State ---
+    still_unmatched = []
+    for host_name, host_hometown in unmatched_hosts:
+        _, h_state, _ = parse_location(host_hometown)
+        matched_guest = None
+        for g in available_guests:
+            _, g_state, _ = parse_location(g["location"])
+            if h_state and g_state and h_state == g_state:
+                matched_guest = g
+                break
+        if matched_guest:
+            available_guests.remove(matched_guest)
+            results[host_name] = {"Host": host_name, "Host Hometown": host_hometown,
+                "Guest": matched_guest["name"], "Guest Location": matched_guest["location"],
+                "Match Quality": "🟡 Same State"}
+        else:
+            still_unmatched.append((host_name, host_hometown))
+    unmatched_hosts = still_unmatched
+
+    # --- Pass 3: Same Region ---
+    still_unmatched = []
+    for host_name, host_hometown in unmatched_hosts:
+        _, _, h_region = parse_location(host_hometown)
+        matched_guest = None
+        for g in available_guests:
+            _, _, g_region = parse_location(g["location"])
+            if h_region and g_region and h_region == g_region:
+                matched_guest = g
+                break
+        if matched_guest:
+            available_guests.remove(matched_guest)
+            results[host_name] = {"Host": host_name, "Host Hometown": host_hometown,
+                "Guest": matched_guest["name"], "Guest Location": matched_guest["location"],
+                "Match Quality": "🟠 Same Region"}
+        else:
+            still_unmatched.append((host_name, host_hometown))
+    unmatched_hosts = still_unmatched
+
+    # --- Pass 4: Whoever is left ---
+    for host_name, host_hometown in unmatched_hosts:
+        if available_guests:
+            matched_guest = available_guests.pop(0)
+            results[host_name] = {"Host": host_name, "Host Hometown": host_hometown,
+                "Guest": matched_guest["name"], "Guest Location": matched_guest["location"],
+                "Match Quality": "⚪ No Geographic Match"}
+        else:
+            results[host_name] = {"Host": host_name, "Host Hometown": host_hometown,
+                "Guest": "⚠️ No guest available", "Guest Location": "—",
+                "Match Quality": "⚠️ Unassigned"}
+
+    return pd.DataFrame(results.values())
 
 # --- TEMPLATE GENERATOR ---
 # Defined here at the top so it's available when the download button renders in the UI.
@@ -96,10 +288,7 @@ Click <b>⚙️ SETTINGS & CONTROLS</b> above the upload button to customize the
 &nbsp;&nbsp;• <b>Priority Staff</b> — names listed here get assigned to Floater Lanes first. Edit to match your current roster.<br>
 &nbsp;&nbsp;• <b>Recruit Lanes / Floater Lanes</b> — set how many of each lane type to generate.<br>
 &nbsp;&nbsp;• <b>Practice Start &amp; End Time</b> — set the window the scheduler should fill. Availability outside this window is ignored.<br>
-&nbsp;&nbsp;• <b>Minimum Hours</b> — any staff member scheduled for less than this amount will be not included or flagged ⚠️ in the roster.<br><br>
-            
-<b>Step 7 — Download Results</b><br>
-Scroll to the bottom of the page and click the "💾 Download Finished Schedule" button to download the generated schedule. The downloaded file will go to your downloads folder <br><br>
+&nbsp;&nbsp;• <b>Minimum Hours</b> — any staff member scheduled for less than this amount will be flagged ⚠️ in the roster.<br><br>
 
 <b>Format reminder:</b> Column A = staff name, Column B = their availability (e.g. <i>8am-4pm</i> or <i>Available all day!</i>). No headers needed.
 </div>
@@ -349,6 +538,18 @@ if file:
     for i in range(num_floater):
         all_lanes.append({"type": f"Floater Lane {i+1}", "data": build_lane_sticky(p_pool, o_pool, start_m, end_m, min_m)})
 
+    # NEW: collect only the first scheduled host in each Recruit Lane.
+    # These are the only people who get paired with guests — floater lanes are excluded.
+    # "First host" = the first non-GAP segment in the lane's schedule data.
+    recruit_lane_first_hosts = set()
+    for lane in all_lanes:
+        if not lane["type"].startswith("Recruit Lane"):
+            continue  # skip floater lanes entirely
+        for seg in lane["data"]:
+            if seg["name"] != "GAP":
+                recruit_lane_first_hosts.add(seg["name"])
+                break  # only want the first person, then move to next lane
+
     # FIXED: fmt_time is now defined at the top of the file, not re-created here every loop.
     # The while loop is now clean — it just calls fmt_time, not defines it.
     BLOCKS = []
@@ -401,6 +602,59 @@ if file:
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
             roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
-        st.download_button("💾 Download Finished Schedule", out.getvalue(), "OSU_Football_Report.xlsx")
+        st.download_button("💾 Save Final Report to Excel", out.getvalue(), "OSU_Football_Report.xlsx")
+
+        # --- NEW: OPTIONAL GUEST MATCHING SECTION ---
+        # This only appears after a schedule has been generated.
+        # It's wrapped in an expander so it's out of the way when not needed.
+        st.divider()
+        with st.expander("🤝 Optional: Match Hosts to Guests by Location"):
+            st.markdown("""
+            Upload the two files below to automatically pair each scheduled staff member
+            with a guest from the same city, state, or region.
+            """)
+
+            roster_file = st.file_uploader("📋 Upload Staff Roster Excel (with hometowns)", type="xlsx", key="roster")
+            guest_pdf   = st.file_uploader("📄 Upload Guest List PDF", type="pdf", key="guests")
+
+            if roster_file and guest_pdf:
+                # FIXED: header=0 because the staff roster has a real header row
+                # (First Name, Last Name, Hometown). Previously using header=None
+                # treated that header row as a person named "First Name Last Name"
+                # and shifted all real staff rows down by one, causing missed matches.
+                staff_roster_df = pd.read_excel(roster_file, header=0)
+
+                # Extract guests from the PDF using pdfplumber
+                guest_list = extract_guests_from_pdf(guest_pdf)
+
+                if not guest_list:
+                    st.warning("⚠️ Could not read any guests from the PDF. Make sure it's a digital (not scanned) PDF with a visible table.")
+                else:
+                    # CHANGED: only pass the first host from each Recruit Lane.
+                    # Floater lane staff and anyone after the first host in a lane
+                    # are excluded — they don't get guest assignments.
+                    match_df = match_hosts_to_guests(recruit_lane_first_hosts, staff_roster_df, guest_list)
+
+                    if match_df.empty:
+                        st.warning("No matches could be made. Check that staff names in the roster match names in the schedule.")
+                    else:
+                        st.success(f"✅ Matched {len(match_df)} hosts to guests.")
+                        st.dataframe(match_df, use_container_width=True)
+
+                        # Download the match results as Excel
+                        match_out = io.BytesIO()
+                        with pd.ExcelWriter(match_out, engine='openpyxl') as writer:
+                            match_df.to_excel(writer, index=False, sheet_name='Host_Guest_Matches')
+                        st.download_button(
+                            "💾 Download Host-Guest Matches",
+                            match_out.getvalue(),
+                            "OSU_Host_Guest_Matches.xlsx"
+                        )
+
+                        # Show a summary of how many matched at each tier
+                        st.markdown("**Match Quality Summary:**")
+                        summary = match_df["Match Quality"].value_counts().reset_index()
+                        summary.columns = ["Match Quality", "Count"]
+                        st.table(summary)
     else:
         st.warning("No staff members could be scheduled. Check the availability format in your upload.")
