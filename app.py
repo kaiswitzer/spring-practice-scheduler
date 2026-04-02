@@ -290,6 +290,12 @@ Click <b>⚙️ SETTINGS & CONTROLS</b> above the upload button to customize the
 &nbsp;&nbsp;• <b>Practice Start &amp; End Time</b> — set the window the scheduler should fill. Availability outside this window is ignored.<br>
 &nbsp;&nbsp;• <b>Minimum Hours</b> — any staff member scheduled for less than this amount will be flagged ⚠️ in the roster.<br><br>
 
+<b>Step 7 — Download Results</b><br>
+Scroll to the bottom of the page and click the <b>💾 Save Finished Schedule</b> button to download the generated schedule. The file will go to your downloads folder.<br><br>
+
+<b>Step 8 — Match Hosts to Guests (optional)</b><br>
+If you need to pair recruit lane hosts with visiting guests by location, scroll to the bottom and open the <b>🤝 Optional: Match Hosts to Guests by Location</b> section. See the detailed instructions there.<br><br>
+
 <b>Format reminder:</b> Column A = staff name, Column B = their availability (e.g. <i>8am-4pm</i> or <i>Available all day!</i>). No headers needed.
 </div>
 """, unsafe_allow_html=True)
@@ -602,17 +608,37 @@ if file:
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             pd.DataFrame(rows).to_excel(writer, index=False, sheet_name='Schedule')
             roster_df.to_excel(writer, index=False, sheet_name='Staff_Roster')
-        st.download_button("💾 Save Final Report to Excel", out.getvalue(), "OSU_Football_Report.xlsx")
+        st.download_button("💾 Save Finished Schedule", out.getvalue(), "OSU_Football_Report.xlsx")
 
         # --- NEW: OPTIONAL GUEST MATCHING SECTION ---
         # This only appears after a schedule has been generated.
         # It's wrapped in an expander so it's out of the way when not needed.
         st.divider()
-        with st.expander("🤝 Optional: Match Hosts to Guests by Location"):
-            st.markdown("""
-            Upload the two files below to automatically pair each scheduled staff member
-            with a guest from the same city, state, or region.
-            """)
+        st.markdown("### 🤝 Optional: Host & Guest Matching")
+        st.markdown("""
+<div class="instruction-box">
+This feature pairs the <b>first scheduled host in each Recruit Lane</b> with a visiting guest based on geographic proximity.
+Floater lane staff are not included. You will need two files ready before using this:<br><br>
+
+<b>What you need:</b><br>
+&nbsp;&nbsp;• <b>Staff Roster Excel</b> — the main staff roster file with columns: First Name, Last Name, Hometown.<br>
+&nbsp;&nbsp;• <b>Guest List PDF</b> — the recruit visit PDF with guest name and city (state) columns.<br><br>
+
+<b>How matching works:</b><br>
+&nbsp;&nbsp;1. The app first tries to match each host with a guest from the <b>same city</b>.<br>
+&nbsp;&nbsp;2. If no city match exists, it tries the <b>same state</b>.<br>
+&nbsp;&nbsp;3. If no state match, it tries the <b>same region</b> (Northeast, Southeast, Midwest, Southwest, West).<br>
+&nbsp;&nbsp;4. Any remaining unmatched hosts are paired with whoever is left.<br><br>
+
+<b>How to use it:</b><br>
+&nbsp;&nbsp;1. Upload both files using the uploaders inside the expander below.<br>
+&nbsp;&nbsp;2. The match table will generate automatically.<br>
+&nbsp;&nbsp;3. Review the <b>Match Quality</b> column to see how well each pair was matched.<br>
+&nbsp;&nbsp;4. Click <b>💾 Download Host-Guest Matches</b> to save the results to Excel.
+</div>
+""", unsafe_allow_html=True)
+
+        with st.expander("🤝 Optional: Match Hosts to Guests by Location (Click to expand)"):
 
             roster_file = st.file_uploader("📋 Upload Staff Roster Excel (with hometowns)", type="xlsx", key="roster")
             guest_pdf   = st.file_uploader("📄 Upload Guest List PDF", type="pdf", key="guests")
